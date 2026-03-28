@@ -7,37 +7,40 @@ The daily airborne count serves as a high-frequency proxy for global
 aviation fuel demand / economic activity.
 """
 
+import logging
 from datetime import datetime
-from pathlib import Path
 
 import pandas as pd
-import requests
+
+from data.http import http_get
+from settings import DATA_DIR
+
+logger = logging.getLogger(__name__)
 
 _API_URL = "https://opensky-network.org/api/states/all"
 
-# Store path
-DATA_DIR = Path(__file__).resolve().parent.parent / "local_data"
 
-
-def fetch_flight_snapshot() -> int:
+def fetch_flight_snapshot() -> int | None:
     """Return the number of aircraft currently airborne worldwide.
 
     Uses the anonymous OpenSky endpoint (no API key needed).
     Costs 4 API credits out of 400/day budget.
-    Returns 0 on error.
+    Returns None on error.
     """
     try:
-        resp = requests.get(_API_URL, timeout=30)
+        resp = http_get(_API_URL)
         resp.raise_for_status()
         data = resp.json()
         states = data.get("states", [])
         if not states:
-            return 0
+            logger.warning("OpenSky returned no states")
+            return None
         # Count only airborne aircraft (on_ground == False, index 8)
-        airborne = sum(1 for s in states if not s[8])
+        airborne = sum(1 for s in states if len(s) > 8 and not s[8])
         return airborne
-    except Exception:
-        return 0
+    except Exception as exc:
+        logger.warning("Failed to fetch OpenSky snapshot: %s", exc)
+        return None
 
 
 def update_flight_history() -> pd.DataFrame:
@@ -53,13 +56,13 @@ def update_flight_history() -> pd.DataFrame:
     try:
         if path.exists():
             existing = pd.read_parquet(path)
-    except Exception:
-        pass
+    except (OSError, ValueError) as exc:
+        logger.warning("Failed to read OpenSky parquet %s: %s", path, exc)
 
     # Take snapshot
     count = fetch_flight_snapshot()
-    if count == 0 and not existing.empty:
-        return existing  # Don't overwrite with a failed reading
+    if count is None:
+        return existing if not existing.empty else pd.DataFrame()
 
     today = pd.Timestamp(datetime.now().date())
     new_row = pd.DataFrame({"airborne_count": [count]}, index=pd.DatetimeIndex([today], name="Date"))

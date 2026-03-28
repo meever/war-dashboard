@@ -3,8 +3,11 @@ FRED (Federal Reserve Economic Data) API client.
 Fetches macro indicators: industrial production, manufacturing, yield curve, etc.
 """
 
-import os
+import logging
+
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 FRED_SERIES = {
     "Industrial Production": "INDPRO",
@@ -31,7 +34,8 @@ def fetch_fred_series(
 
     try:
         from fredapi import Fred
-    except ImportError:
+    except ImportError as exc:
+        logger.warning("fredapi is unavailable: %s", exc)
         return {}
 
     if series_ids is None:
@@ -46,8 +50,8 @@ def fetch_fred_series(
             if s is not None and not s.empty:
                 s.name = label
                 results[label] = s.dropna()
-        except Exception:
-            continue
+        except Exception as exc:
+            logger.warning("Failed to fetch FRED series %s (%s): %s", label, sid, exc)
 
     return results
 
@@ -67,19 +71,3 @@ def fetch_fred_dataframe(
 
     df = pd.DataFrame(data)
     return df.ffill()
-
-
-# ── Standalone test ──────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    from dotenv import load_dotenv
-
-    load_dotenv()
-    key = os.environ.get("FRED_API_KEY", "")
-    if not key:
-        print("⚠ FRED_API_KEY not set — set it in .env or environment")
-    else:
-        print("=== FRED Macro Series ===")
-        df = fetch_fred_dataframe(key)
-        print(df.tail(10))
-        print(f"\nColumns: {list(df.columns)}")
-        print(f"Date range: {df.index.min()} → {df.index.max()}")

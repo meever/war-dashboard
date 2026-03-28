@@ -1,0 +1,23 @@
+[project]
+name = "war-dashboard"
+version = "2.0.0"
+description = "Global Macro War Room — Energy Shock Monitor"
+requires-python = ">=3.11"
+dependencies = [
+    "streamlit>=1.30.0",
+    "yfinance>=0.2.30",
+    "fredapi>=0.5.0",
+    "requests>=2.31.0",
+    "pandas>=2.0.0",
+    "pyarrow>=15.0.0",
+    "numpy>=1.24.0",
+    "plotly>=5.18.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.scripts]
+war-dashboard = "streamlit.cli:main"
+
+[tool.uv]
+# Use the shared dashboards venv when developing locally
+# uv sync --python D:\code\shared_venv\dashboards\Scripts\python.exe

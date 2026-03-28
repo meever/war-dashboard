@@ -3,21 +3,15 @@ EIA (U.S. Energy Information Administration) API v2 client.
 Fetches petroleum inventories and refinery utilization data.
 """
 
-import os
+import logging
+
 import pandas as pd
-import requests
-from datetime import datetime
+
+from data.http import http_get
+
+logger = logging.getLogger(__name__)
 
 EIA_BASE_URL = "https://api.eia.gov/v2"
-
-# Key EIA series for petroleum inventories (Short-Term Energy Outlook)
-# These are routes under /petroleum/steo/
-EIA_INVENTORY_SERIES = {
-    "Crude Oil Stocks": "STEO.COSXP.M",
-    "Distillate Stocks": "STEO.DFSXP.M",
-    "Gasoline Stocks": "STEO.MGSXP.M",
-    "Refinery Utilization": "STEO.CRUOPP.M",
-}
 
 # Weekly petroleum status report series (more granular)
 EIA_WEEKLY_SERIES = {
@@ -59,11 +53,12 @@ def fetch_eia_data(
                 "length": 5000,
             }
 
-            resp = requests.get(url, params=params, timeout=30)
+            resp = http_get(url, params=params)
             resp.raise_for_status()
             data = resp.json()
 
             if "response" not in data or "data" not in data["response"]:
+                logger.warning("Unexpected EIA response shape for %s", series_id)
                 continue
 
             rows = data["response"]["data"]
@@ -80,8 +75,8 @@ def fetch_eia_data(
                 df = df.set_index("date").sort_index()
                 results[label] = df[["value"]].rename(columns={"value": label})
 
-        except Exception:
-            continue
+        except Exception as exc:
+            logger.warning("Failed to fetch EIA series %s (%s): %s", label, series_id, exc)
 
     return results
 
@@ -105,38 +100,3 @@ def fetch_eia_inventories(api_key: str, start_date: str = "2020-01-01") -> pd.Da
         merged = merged.join(f, how="outer")
 
     return merged.ffill()
-
-
-def fetch_eia_monthly(api_key: str, start_date: str = "2005-01-01") -> pd.DataFrame:
-    """Fetch monthly STEO inventory/utilization data (longer history)."""
-    data_dict = fetch_eia_data(api_key, EIA_INVENTORY_SERIES, start_date)
-    if not data_dict:
-        return pd.DataFrame()
-
-    frames = list(data_dict.values())
-    if not frames:
-        return pd.DataFrame()
-
-    merged = frames[0]
-    for f in frames[1:]:
-        merged = merged.join(f, how="outer")
-
-    return merged.ffill()
-
-
-# ── Standalone test ──────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    from dotenv import load_dotenv
-
-    load_dotenv()
-    key = os.environ.get("EIA_API_KEY", "")
-    if not key:
-        print("⚠ EIA_API_KEY not set — set it in .env or environment")
-    else:
-        print("=== EIA Weekly Inventories ===")
-        inv = fetch_eia_inventories(key)
-        print(inv.tail(10))
-
-        print("\n=== EIA Monthly STEO ===")
-        monthly = fetch_eia_monthly(key)
-        print(monthly.tail(10))

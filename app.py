@@ -3,8 +3,10 @@ WAR DASHBOARD — Global Macro War Room
 Main Streamlit entry point.
 """
 
-import streamlit as st
 import pandas as pd
+import streamlit as st
+
+from settings import APP_VERSION, bootstrap_runtime
 
 st.set_page_config(
     page_title="WAR DASHBOARD",
@@ -136,15 +138,19 @@ st.markdown("""
 from components.sidebar import render_sidebar
 from components.status_bar import render_status_bar
 from data.cache import (
-    get_asset_data, get_crack_spreads,
+    get_asset_data,
     get_full_market_history, get_full_tanker_history,
     get_full_eia_history, get_full_fred_history,
     get_firms_data, get_flight_data,
 )
 from data.store import build_crack_spread_history, build_tanker_index
-from charts.assets import make_asset_grid, PLOTLY_CONFIG
+from data.market import TIMEFRAME_DAYS
+from charts.assets import make_asset_grid
+from charts.utils import PLOTLY_CONFIG
 from charts.energy import make_energy_grid
 from charts.macro import make_macro_grid, SIGNAL_GUIDE
+
+bootstrap_runtime()
 
 
 # Asset label map (used by status bar for display names)
@@ -171,7 +177,6 @@ def _slice_df(df: pd.DataFrame, days: int) -> pd.DataFrame:
 
 def _tf_days(tf: str) -> int:
     """Convert timeframe string to days."""
-    from data.market import TIMEFRAME_DAYS
     return TIMEFRAME_DAYS.get(tf, 60)
 
 
@@ -289,6 +294,18 @@ def main():
     with st.spinner("Polling global flight activity..."):
         flights_df = get_flight_data()
 
+    runtime_issues = []
+    if config["eia_key"] and eia_df.empty:
+        runtime_issues.append("EIA key loaded but no inventory data was returned.")
+    if config["fred_key"] and fred_df.empty:
+        runtime_issues.append("FRED key loaded but no macro data was returned.")
+    if config.get("firms_key") and firms_df.empty:
+        runtime_issues.append("FIRMS key loaded but no refinery fire data was returned.")
+    if flights_df.empty:
+        runtime_issues.append("OpenSky flight data is currently unavailable.")
+    if runtime_issues:
+        st.warning(" ".join(runtime_issues))
+
     # ── Compact status row (8 cards: 4 price + 4 signal) ────────────────
     render_status_bar(
         price_data=market_hist or {},
@@ -354,12 +371,12 @@ def main():
                         background:#0F0F1A; border:1px solid #1A1A2E; border-radius:6px;
                         padding:10px 14px; margin-bottom:12px;">
                 <b style="color:#FF4136;">SIGNAL GUIDE</b><br>
-                <span style="color:#00FFFF;">Yield Curve:</span> Below 0 = inverted = recession warning &nbsp;|&nbsp;
-                <span style="color:#00FF41;">Industrial Production:</span> Rising = expansion, falling = contraction<br>
-                <span style="color:#FF8C00;">Tanker Freight:</span> Rising = crude shipping demand growing &nbsp;|&nbsp;
-                <span style="color:#FFD700;">Capacity Util:</span> &gt;80% strong, &lt;75% = weak demand
+                <span style="color:#00FFFF;">Yield Curve:</span> %s &nbsp;|&nbsp;
+                <span style="color:#00FF41;">Industrial Production:</span> %s<br>
+                <span style="color:#FF8C00;">Tanker Freight:</span> %s &nbsp;|&nbsp;
+                <span style="color:#FFD700;">Capacity Util:</span> %s
             </div>
-            """, unsafe_allow_html=True)
+            """ % (SIGNAL_GUIDE["yc"], SIGNAL_GUIDE["indpro"], SIGNAL_GUIDE["tanker"], SIGNAL_GUIDE["tcu"]), unsafe_allow_html=True)
             st.plotly_chart(make_macro_grid(fred_view, tanker_view), width='stretch', config=PLOTLY_CONFIG)
 
     # ── TAB: Alt Intel ───────────────────────────────────────────────────

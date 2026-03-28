@@ -5,13 +5,16 @@ as parquet files under local_data/. On subsequent runs, only fetches
 incremental new data since the last stored date and appends it.
 """
 
-import os
+import logging
 import pandas as pd
 import yfinance as yf
 from datetime import datetime, timedelta
 from pathlib import Path
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "local_data"
+from data.market import build_crack_spread_frame
+from settings import DATA_DIR
+
+logger = logging.getLogger(__name__)
 
 # How often to check for new incremental data (hours)
 REFRESH_HOURS = 1
@@ -61,42 +64,62 @@ def _read_parquet_safe(path: Path) -> pd.DataFrame:
     try:
         if path.exists():
             return pd.read_parquet(path)
-    except Exception:
-        pass
+    except (OSError, ValueError) as exc:
+        logger.warning("Failed to read parquet %s: %s", path, exc)
     return pd.DataFrame()
 
 
+def _download_start(existing: pd.DataFrame) -> str:
+    """Return the correct start date for an incremental download."""
+    if existing.empty:
+        return HISTORY_START
+    last_date = existing.index.max()
+    return (last_date - timedelta(days=3)).strftime("%Y-%m-%d")
+
+
+def _prepare_downloaded_history(frame: pd.DataFrame) -> pd.DataFrame:
+    """Normalize yfinance history into a parquet-friendly frame."""
+    if isinstance(frame.columns, pd.MultiIndex):
+        frame.columns = frame.columns.get_level_values(0)
+    frame.index.name = "Date"
+    return frame
+
+
+def _combine_history(existing: pd.DataFrame, new_frame: pd.DataFrame) -> pd.DataFrame:
+    """Merge existing and newly downloaded time-series frames."""
+    if existing.empty:
+        return new_frame.sort_index()
+    combined = pd.concat([existing, new_frame])
+    combined = combined[~combined.index.duplicated(keep="last")]
+    return combined.sort_index()
+
+
+def _get_close(df: pd.DataFrame) -> pd.Series:
+    """Extract the Close column, falling back to the first column."""
+    return df["Close"] if "Close" in df.columns else df.iloc[:, 0]
+
+
 # ── yfinance incremental fetcher ─────────────────────────────────────────────
-def fetch_and_store_market_history(force: bool = False) -> dict[str, pd.DataFrame]:
-    """
-    For each ticker: load existing parquet, then fetch only new data
-    since the last stored date. Appends and saves back.
-    On first run, fetches full history from HISTORY_START.
-    """
+def _fetch_and_store_yf_group(
+    tickers: dict[str, str], force: bool = False,
+) -> dict[str, pd.DataFrame]:
+    """For each ticker: load existing parquet, fetch only new data since the
+    last stored date, append and save back."""
     _ensure_dir()
-    results = {}
+    results: dict[str, pd.DataFrame] = {}
     today_str = datetime.now().strftime("%Y-%m-%d")
 
-    for name, ticker in HISTORY_TICKERS.items():
+    for name, ticker in tickers.items():
         path = _parquet_path(name)
 
-        # If file is fresh enough, just load it
         if not force and not _is_stale(path):
             existing = _read_parquet_safe(path)
             if not existing.empty:
                 results[name] = existing
                 continue
 
-        # Load existing data
         existing = _read_parquet_safe(path)
-
-        if existing.empty:
-            # Full fetch from scratch
-            start = HISTORY_START
-        else:
-            # Incremental: start from last date (overlap 3 days for safety)
-            last_date = existing.index.max()
-            start = (last_date - timedelta(days=3)).strftime("%Y-%m-%d")
+        start = _download_start(existing)
 
         try:
             new_df = yf.download(
@@ -107,75 +130,24 @@ def fetch_and_store_market_history(force: bool = False) -> dict[str, pd.DataFram
                 results[name] = existing if not existing.empty else pd.DataFrame()
                 continue
 
-            if isinstance(new_df.columns, pd.MultiIndex):
-                new_df.columns = new_df.columns.get_level_values(0)
-            new_df.index.name = "Date"
-
-            if not existing.empty:
-                # Combine: new data overwrites overlapping dates
-                combined = pd.concat([existing, new_df])
-                combined = combined[~combined.index.duplicated(keep="last")]
-                combined = combined.sort_index()
-            else:
-                combined = new_df
-
+            combined = _combine_history(existing, _prepare_downloaded_history(new_df))
             combined.to_parquet(path)
             results[name] = combined
-        except Exception:
+        except Exception as exc:
+            logger.warning("Failed to refresh %s (%s): %s", name, ticker, exc)
             results[name] = existing if not existing.empty else pd.DataFrame()
 
     return results
+
+
+def fetch_and_store_market_history(force: bool = False) -> dict[str, pd.DataFrame]:
+    """Fetch full history for core market tickers."""
+    return _fetch_and_store_yf_group(HISTORY_TICKERS, force)
 
 
 def fetch_and_store_tanker_history(force: bool = False) -> dict[str, pd.DataFrame]:
     """Fetch full history for tanker equities (wet freight proxy)."""
-    _ensure_dir()
-    results = {}
-    today_str = datetime.now().strftime("%Y-%m-%d")
-
-    for name, ticker in TANKER_TICKERS.items():
-        path = _parquet_path(name)
-
-        if not force and not _is_stale(path):
-            existing = _read_parquet_safe(path)
-            if not existing.empty:
-                results[name] = existing
-                continue
-
-        existing = _read_parquet_safe(path)
-
-        if existing.empty:
-            start = HISTORY_START
-        else:
-            last_date = existing.index.max()
-            start = (last_date - timedelta(days=3)).strftime("%Y-%m-%d")
-
-        try:
-            new_df = yf.download(
-                ticker, start=start, end=today_str,
-                auto_adjust=True, progress=False, threads=False,
-            )
-            if new_df.empty:
-                results[name] = existing if not existing.empty else pd.DataFrame()
-                continue
-
-            if isinstance(new_df.columns, pd.MultiIndex):
-                new_df.columns = new_df.columns.get_level_values(0)
-            new_df.index.name = "Date"
-
-            if not existing.empty:
-                combined = pd.concat([existing, new_df])
-                combined = combined[~combined.index.duplicated(keep="last")]
-                combined = combined.sort_index()
-            else:
-                combined = new_df
-
-            combined.to_parquet(path)
-            results[name] = combined
-        except Exception:
-            results[name] = existing if not existing.empty else pd.DataFrame()
-
-    return results
+    return _fetch_and_store_yf_group(TANKER_TICKERS, force)
 
 
 def build_tanker_index(tanker_data: dict[str, pd.DataFrame]) -> pd.DataFrame:
@@ -188,8 +160,7 @@ def build_tanker_index(tanker_data: dict[str, pd.DataFrame]) -> pd.DataFrame:
     for name, df in tanker_data.items():
         if df is None or df.empty:
             continue
-        s = df["Close"] if "Close" in df.columns else df.iloc[:, 0]
-        s = s.dropna()
+        s = _get_close(df).dropna()
         if len(s) > 1:
             closes[name] = s
 
@@ -203,98 +174,42 @@ def build_tanker_index(tanker_data: dict[str, pd.DataFrame]) -> pd.DataFrame:
     return pd.DataFrame({"Tanker Freight": idx}).dropna()
 
 
-def load_market_history() -> dict[str, pd.DataFrame]:
-    """Load all stored market history from parquet. Fetch if missing."""
+# ── EIA / FRED full history ──────────────────────────────────────────────────
+
+def _fetch_and_store_cached(
+    name: str, fetcher, force: bool = False,
+) -> pd.DataFrame:
+    """Fetch a DataFrame via *fetcher*, cache to parquet, return cached if fresh."""
     _ensure_dir()
-    results = {}
-    any_missing = False
+    path = _parquet_path(name)
 
-    for name in HISTORY_TICKERS:
-        path = _parquet_path(name)
-        if path.exists():
-            try:
-                results[name] = pd.read_parquet(path)
-            except Exception:
-                any_missing = True
-        else:
-            any_missing = True
+    if not force and not _is_stale(path):
+        cached = _read_parquet_safe(path)
+        if not cached.empty:
+            return cached
 
-    if any_missing:
-        results = fetch_and_store_market_history()
+    df = fetcher()
+    if not df.empty:
+        df.to_parquet(path)
+        return df
 
-    return results
+    return _read_parquet_safe(path)
 
 
-# ── EIA full history ─────────────────────────────────────────────────────────
 def fetch_and_store_eia_history(api_key: str, force: bool = False) -> pd.DataFrame:
     """Fetch and store EIA weekly inventory data going back as far as possible."""
-    _ensure_dir()
-    path = _parquet_path("eia_weekly")
-
-    if not force and not _is_stale(path):
-        try:
-            return pd.read_parquet(path)
-        except Exception:
-            pass
-
     from data.energy import fetch_eia_inventories
-    df = fetch_eia_inventories(api_key, start_date="1990-01-01")
-    if not df.empty:
-        df.to_parquet(path)
-        return df
-
-    if path.exists():
-        return pd.read_parquet(path)
-    return pd.DataFrame()
+    return _fetch_and_store_cached(
+        "eia_weekly", lambda: fetch_eia_inventories(api_key, start_date="1990-01-01"), force,
+    )
 
 
-def load_eia_history(api_key: str = "") -> pd.DataFrame:
-    """Load stored EIA data, or fetch if missing."""
-    path = _parquet_path("eia_weekly")
-    if path.exists():
-        try:
-            return pd.read_parquet(path)
-        except Exception:
-            pass
-    if api_key:
-        return fetch_and_store_eia_history(api_key)
-    return pd.DataFrame()
-
-
-# ── FRED full history ────────────────────────────────────────────────────────
 def fetch_and_store_fred_history(api_key: str, force: bool = False) -> pd.DataFrame:
     """Fetch and store FRED macro series going back as far as possible."""
-    _ensure_dir()
-    path = _parquet_path("fred_macro")
-
-    if not force and not _is_stale(path):
-        try:
-            return pd.read_parquet(path)
-        except Exception:
-            pass
-
     from data.macro import fetch_fred_dataframe
-    df = fetch_fred_dataframe(api_key, start_date="1960-01-01")
-    if not df.empty:
-        df.to_parquet(path)
-        return df
-
-    if path.exists():
-        return pd.read_parquet(path)
-    return pd.DataFrame()
-
-
-def load_fred_history(api_key: str = "") -> pd.DataFrame:
-    """Load stored FRED data, or fetch if missing."""
-    path = _parquet_path("fred_macro")
-    if path.exists():
-        try:
-            return pd.read_parquet(path)
-        except Exception:
-            pass
-    if api_key:
-        return fetch_and_store_fred_history(api_key)
-    return pd.DataFrame()
+    return _fetch_and_store_cached(
+        "fred_macro", lambda: fetch_fred_dataframe(api_key, start_date="1960-01-01"), force,
+    )
 
 
 # ── NASA FIRMS fire data ─────────────────────────────────────────────────────
@@ -304,18 +219,21 @@ def fetch_and_store_firms(firms_key: str, force: bool = False) -> pd.DataFrame:
     path = _parquet_path("firms_fires")
 
     existing = _read_parquet_safe(path) if not force else pd.DataFrame()
+    days = 5
+    if not existing.empty:
+        latest_date = pd.Timestamp(existing.index.max()).normalize()
+        today = pd.Timestamp(datetime.now().date())
+        days = max(1, min((today - latest_date).days + 1, 5))
 
     from data.firms import fetch_firms_fires, aggregate_daily_counts
-    raw = fetch_firms_fires(firms_key, days=5)
+    raw = fetch_firms_fires(firms_key, days=days)
     new = aggregate_daily_counts(raw)
 
     if new.empty:
         return existing if not existing.empty else pd.DataFrame()
 
     if not existing.empty:
-        combined = pd.concat([existing, new])
-        combined = combined[~combined.index.duplicated(keep="last")]
-        combined = combined.sort_index()
+        combined = _combine_history(existing, new)
     else:
         combined = new
 
@@ -324,7 +242,7 @@ def fetch_and_store_firms(firms_key: str, force: bool = False) -> pd.DataFrame:
 
 
 # ── OpenSky flight data ──────────────────────────────────────────────────────
-def fetch_and_store_flights(force: bool = False) -> pd.DataFrame:
+def fetch_and_store_flights() -> pd.DataFrame:
     """Snapshot global airborne aircraft count and append to parquet."""
     from data.opensky import update_flight_history
     return update_flight_history()
@@ -340,28 +258,11 @@ def build_crack_spread_history(market_data: dict[str, pd.DataFrame]) -> pd.DataF
     if ho_df is None or cl_df is None:
         return pd.DataFrame()
 
-    result = pd.DataFrame(index=cl_df.index)
+    ho_close = _get_close(ho_df)
+    cl_close = _get_close(cl_df)
+    rb_close = _get_close(rb_df) if rb_df is not None else None
 
-    ho_close = ho_df["Close"] if "Close" in ho_df.columns else ho_df.iloc[:, 0]
-    cl_close = cl_df["Close"] if "Close" in cl_df.columns else cl_df.iloc[:, 0]
-
-    result["Heating Oil Spread"] = (ho_close * 42) - cl_close
-
-    if rb_df is not None:
-        rb_close = rb_df["Close"] if "Close" in rb_df.columns else rb_df.iloc[:, 0]
-        result["Gasoline Spread"] = (rb_close * 42) - cl_close
-
-    return result.dropna(how="all").ffill()
-
-
-# ── Standalone test ──────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    print("Fetching full market history...")
-    data = fetch_and_store_market_history(force=True)
-    for name, df in data.items():
-        if not df.empty:
-            print(f"  {name}: {df.index.min().date()} → {df.index.max().date()}  ({len(df)} rows)")
-        else:
-            print(f"  {name}: EMPTY")
-
-    print(f"\nFiles saved to: {DATA_DIR}")
+    result = build_crack_spread_frame(ho_close, cl_close, rb_close)
+    if result.empty:
+        return result
+    return result.reindex(cl_df.index).dropna(how="all").ffill()

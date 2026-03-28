@@ -10,10 +10,13 @@ acq_date, acq_time, satellite, confidence, version, bright_t31, frp, ...
 """
 
 import io
-from datetime import datetime
+import logging
 
 import pandas as pd
-import requests
+
+from data.http import http_get
+
+logger = logging.getLogger(__name__)
 
 # ── Refinery bounding boxes (west, south, east, north) ───────────────────────
 # Each box is ≈50×50 km around the refinery complex centroid.
@@ -55,14 +58,14 @@ def fetch_firms_fires(map_key: str, days: int = 2) -> pd.DataFrame:
             f"/{map_key}/{_SOURCE}/{w},{s},{e},{n}/{days}"
         )
         try:
-            resp = requests.get(url, timeout=30)
+            resp = http_get(url)
             resp.raise_for_status()
             df = pd.read_csv(io.StringIO(resp.text))
             if not df.empty:
                 df["region"] = region
                 frames.append(df)
-        except Exception:
-            continue
+        except Exception as exc:
+            logger.warning("Failed to fetch FIRMS region %s: %s", region, exc)
 
     if not frames:
         return pd.DataFrame()
@@ -71,7 +74,11 @@ def fetch_firms_fires(map_key: str, days: int = 2) -> pd.DataFrame:
 
     # Normalise date column
     if "acq_date" in result.columns:
-        result["acq_date"] = pd.to_datetime(result["acq_date"])
+        result["acq_date"] = pd.to_datetime(result["acq_date"], errors="coerce")
+        result = result.dropna(subset=["acq_date"])
+    else:
+        logger.warning("FIRMS response missing acq_date column")
+        return pd.DataFrame()
 
     return result
 

@@ -5,10 +5,17 @@ Uses local parquet store as primary source when available,
 falling back to direct yfinance download for fresh data.
 """
 
+import logging
+import time
+
 import pandas as pd
 import yfinance as yf
 from datetime import datetime, timedelta
 from pathlib import Path
+
+from settings import DATA_DIR
+
+logger = logging.getLogger(__name__)
 
 # ── Ticker registry ──────────────────────────────────────────────────────────
 ASSET_TICKERS = {
@@ -19,21 +26,6 @@ ASSET_TICKERS = {
     "US 10Y Yield": "^TNX",
 }
 
-# Crude tanker equities — equal-weight index proxies wet freight / BDTI
-TANKER_TICKERS = {
-    "FRO": "FRO",    # Frontline (VLCCs)
-    "STNG": "STNG",  # Scorpio Tankers (product/crude)
-    "DHT": "DHT",    # DHT Holdings (VLCCs)
-    "INSW": "INSW",  # International Seaways (crude)
-    "TNK": "TNK",    # Teekay Tankers (crude/product)
-}
-
-CRACK_TICKERS = {
-    "Heating Oil": "HO=F",
-    "RBOB Gasoline": "RB=F",
-    "WTI Crude": "CL=F",
-}
-
 # Mapping from asset label to store.py parquet key
 _LABEL_TO_STORE_KEY = {
     "Brent Crude": "brent",
@@ -41,12 +33,6 @@ _LABEL_TO_STORE_KEY = {
     "S&P 500": "spx",
     "Gold": "gold",
     "US 10Y Yield": "us10y",
-}
-
-_CRACK_TO_STORE_KEY = {
-    "Heating Oil": "ho",
-    "RBOB Gasoline": "rb",
-    "WTI Crude": "wti",
 }
 
 # ── Timeframe helpers ────────────────────────────────────────────────────────
@@ -61,8 +47,6 @@ TIMEFRAME_DAYS = {
     "Max": 36500,
 }
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "local_data"
-
 
 def _read_local(store_key: str) -> pd.DataFrame:
     """Read a parquet file from local store if it exists."""
@@ -70,8 +54,8 @@ def _read_local(store_key: str) -> pd.DataFrame:
     try:
         if path.exists():
             return pd.read_parquet(path)
-    except Exception:
-        pass
+    except (OSError, ValueError) as exc:
+        logger.warning("Failed to read local parquet %s: %s", path, exc)
     return pd.DataFrame()
 
 
@@ -84,13 +68,29 @@ def _safe_download(tickers: list[str], start: str, end: str) -> pd.DataFrame:
             if df.empty:
                 return pd.DataFrame()
             return df
-        except Exception:
+        except Exception as exc:
             if attempt == 0:
-                import time
                 time.sleep(1)
                 continue
+            logger.warning("yfinance download failed for %s: %s", tickers, exc)
             return pd.DataFrame()
     return pd.DataFrame()
+
+
+def build_crack_spread_frame(
+    heating_oil: pd.Series,
+    wti: pd.Series,
+    gasoline: pd.Series | None = None,
+) -> pd.DataFrame:
+    """Build crack spread series from component futures prices."""
+    spreads: dict[str, pd.Series] = {}
+    if not heating_oil.empty and not wti.empty:
+        spreads["Heating Oil Spread"] = (heating_oil * 42) - wti
+    if gasoline is not None and not gasoline.empty and not wti.empty:
+        spreads["Gasoline Spread"] = (gasoline * 42) - wti
+    if not spreads:
+        return pd.DataFrame()
+    return pd.DataFrame(spreads).dropna(how="all").sort_index().ffill()
 
 
 # ── Core fetcher ─────────────────────────────────────────────────────────────
@@ -145,69 +145,3 @@ def fetch_asset_data(timeframe: str = "60d") -> pd.DataFrame:
     return result.ffill()
 
 
-# ── Crack spreads ────────────────────────────────────────────────────────────
-def fetch_crack_spreads(timeframe: str = "60d") -> pd.DataFrame:
-    """
-    Compute crack spreads: Heating Oil – WTI and Gasoline – WTI.
-    Uses local parquet when available.
-    Prices are converted to $/barrel equivalent before subtraction.
-    """
-    days = TIMEFRAME_DAYS.get(timeframe, 60)
-    cutoff = pd.Timestamp(datetime.now() - timedelta(days=days))
-
-    # Try local parquet first
-    ho_local = _read_local("ho")
-    rb_local = _read_local("rb")
-    cl_local = _read_local("wti")
-
-    if not ho_local.empty and not cl_local.empty and "Close" in ho_local.columns and "Close" in cl_local.columns:
-        ho = ho_local["Close"].loc[ho_local.index >= cutoff] * 42
-        rb_s = rb_local["Close"].loc[rb_local.index >= cutoff] * 42 if not rb_local.empty and "Close" in rb_local.columns else pd.Series(dtype=float)
-        cl = cl_local["Close"].loc[cl_local.index >= cutoff]
-        result = pd.DataFrame(index=ho.index)
-        if not ho.empty and not cl.empty:
-            result["Heating Oil Spread"] = ho - cl
-        if not rb_s.empty and not cl.empty:
-            result["Gasoline Spread"] = rb_s - cl
-        if not result.empty:
-            return result.ffill()
-
-    # Fallback to yfinance download
-    end = datetime.now()
-    start = end - timedelta(days=days + 10)
-
-    tickers = list(CRACK_TICKERS.values())
-    raw = _safe_download(tickers, start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
-
-    if raw.empty:
-        return pd.DataFrame()
-
-    if isinstance(raw.columns, pd.MultiIndex):
-        closes = raw["Close"]
-    else:
-        closes = raw
-
-    # HO and RB are priced in $/gallon; convert to $/barrel (42 gallons)
-    ho = closes.get("HO=F", pd.Series(dtype=float)) * 42
-    rb = closes.get("RB=F", pd.Series(dtype=float)) * 42
-    cl = closes.get("CL=F", pd.Series(dtype=float))
-
-    result = pd.DataFrame(index=closes.index)
-    if not ho.empty and not cl.empty:
-        result["Heating Oil Spread"] = ho - cl
-    if not rb.empty and not cl.empty:
-        result["Gasoline Spread"] = rb - cl
-
-    result = result.loc[result.index >= cutoff]
-    return result.ffill()
-
-
-# ── Standalone test ──────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    print("=== Asset Data (60d) ===")
-    assets = fetch_asset_data("60d")
-    print(assets.tail())
-
-    print("\n=== Crack Spreads (60d) ===")
-    cracks = fetch_crack_spreads("60d")
-    print(cracks.tail())

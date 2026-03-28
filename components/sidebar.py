@@ -1,14 +1,21 @@
-"""
-Sidebar controls: API key inputs and refresh.
-"""
+"""Sidebar controls: API key inputs and refresh."""
 
 import os
+
 import streamlit as st
-from dotenv import load_dotenv
+
+from settings import APP_VERSION
+
+
+def _clean_key(value: str) -> str:
+    """Normalize text input and ignore example placeholder values."""
+    cleaned = (value or "").strip()
+    if cleaned.startswith("your_") and cleaned.endswith("_here"):
+        return ""
+    return cleaned
 
 
 def render_sidebar() -> dict:
-    load_dotenv(override=True)
     with st.sidebar:
         st.markdown("""
         <div style="text-align: center; padding: 6px 0 12px 0;">
@@ -25,37 +32,37 @@ def render_sidebar() -> dict:
         # ── API Keys ─────────────────────────────────────────────────────
         st.markdown("##### 🔑 API KEYS")
 
-        eia_key = os.environ.get("EIA_API_KEY", "")
-        fred_key = os.environ.get("FRED_API_KEY", "")
-        firms_key = os.environ.get("FIRMS_MAP_KEY", "")
+        eia_key = _clean_key(os.environ.get("EIA_API_KEY", ""))
+        fred_key = _clean_key(os.environ.get("FRED_API_KEY", ""))
+        firms_key = _clean_key(os.environ.get("FIRMS_MAP_KEY", ""))
 
         if not eia_key:
-            eia_key = st.text_input(
+            eia_key = _clean_key(st.text_input(
                 "EIA API Key",
                 type="password",
                 placeholder="Get free key at eia.gov/opendata",
                 help="Required for petroleum inventory data",
-            )
+            ))
         else:
             st.success("EIA key loaded from environment", icon="✅")
 
         if not fred_key:
-            fred_key = st.text_input(
+            fred_key = _clean_key(st.text_input(
                 "FRED API Key",
                 type="password",
                 placeholder="Get free key at fred.stlouisfed.org",
                 help="Required for macro indicator data",
-            )
+            ))
         else:
             st.success("FRED key loaded from environment", icon="✅")
 
         if not firms_key:
-            firms_key = st.text_input(
+            firms_key = _clean_key(st.text_input(
                 "NASA FIRMS Key",
                 type="password",
                 placeholder="Get free key at firms.modaps.eosdis.nasa.gov",
                 help="Required for refinery fire monitoring",
-            )
+            ))
         else:
             st.success("FIRMS key loaded from environment", icon="✅")
 
@@ -69,10 +76,10 @@ def render_sidebar() -> dict:
         st.markdown("""
         <div style="text-align: center; padding: 12px 0 0 0; font-size: 10px;
                     color: #555; font-family: 'Courier New';">
-            WAR DASHBOARD v2.0<br>
+            WAR DASHBOARD %s<br>
             Data: Yahoo Finance · EIA · FRED · NASA FIRMS · OpenSky
         </div>
-        """, unsafe_allow_html=True)
+        """ % APP_VERSION, unsafe_allow_html=True)
 
     return {
         "eia_key": eia_key,

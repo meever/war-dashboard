@@ -2,10 +2,18 @@
 Top-level status indicator bar — compact 8-card single row.
 Price cards show current value. Signal cards show danger/safe with reasoning.
 """
-
-import streamlit as st
-import pandas as pd
+import html as html_mod
 import numpy as np
+import pandas as pd
+import streamlit as st
+
+from settings import (
+    CRACK_DROP_ALERT_PCT,
+    CRACK_HIGH_PERCENTILE,
+    CRACK_LOW_PERCENTILE,
+    INVENTORY_ALERT_ZSCORE,
+    TANKER_DROP_ALERT_PCT,
+)
 
 
 def _card_html(label: str, value: str, color: str = "#E0E0E0") -> str:
@@ -30,7 +38,7 @@ def _signal_card_html(label: str, value: str, is_danger: bool, detail: str = "")
     """Return HTML for a signal card with danger/safe glow."""
     color = "#FF4136" if is_danger else "#00FF41"
     icon = "🔴" if is_danger else "🟢"
-    tip = f' title="{detail}"' if detail else ""
+    tip = f' title="{html_mod.escape(detail)}"' if detail else ""
     return f"""
     <div style="
         background:#0F0F1A; border:1px solid {color}60; border-radius:4px;
@@ -67,9 +75,9 @@ def _check_crack_spread(crack_df: pd.DataFrame) -> tuple[bool, str, str]:
     pctl = (series < current).sum() / len(series) * 100
 
     # Extreme percentile check — historically abnormal levels
-    if pctl >= 95:
+    if pctl >= CRACK_HIGH_PERCENTILE:
         return True, f"${current:.1f}", f"Pctl {pctl:.0f}% — extreme high"
-    if pctl <= 5:
+    if pctl <= CRACK_LOW_PERCENTILE:
         return True, f"${current:.1f}", f"Pctl {pctl:.0f}% — extreme low"
 
     # Momentum check — rapid decline
@@ -77,7 +85,7 @@ def _check_crack_spread(crack_df: pd.DataFrame) -> tuple[bool, str, str]:
     avg_30d = series.iloc[-30:].mean()
     if avg_30d != 0:
         pct_change = (avg_5d - avg_30d) / abs(avg_30d) * 100
-        if pct_change < -15:
+        if pct_change < CRACK_DROP_ALERT_PCT:
             return True, f"${current:.1f}", f"5d/30d: {pct_change:+.1f}%"
 
     return False, f"${current:.1f}", f"Pctl {pctl:.0f}%"
@@ -110,7 +118,7 @@ def _check_inventories(inv_df: pd.DataFrame) -> tuple[bool, str, str]:
         return False, f"{current:,.0f}", "Stable"
 
     z_score = (latest_change - avg_change) / std_change
-    is_danger = z_score > 2.0
+    is_danger = z_score > INVENTORY_ALERT_ZSCORE
     detail = f"Δ {latest_change:+,.0f} (z={z_score:.1f})"
     return is_danger, f"{current:,.0f}", detail
 
@@ -148,7 +156,7 @@ def _check_tanker(tanker_df: pd.DataFrame) -> tuple[bool, str, str]:
         return False, f"{current:,.1f}", "—"
 
     pct_change = (current - baseline) / abs(baseline) * 100
-    is_danger = pct_change < -15
+    is_danger = pct_change < TANKER_DROP_ALERT_PCT
     detail = f"30d: {pct_change:+.1f}%"
     return is_danger, f"{current:,.1f}", detail
 

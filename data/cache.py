@@ -7,7 +7,7 @@ Short TTLs since local parquet is the real persistence layer.
 import streamlit as st
 import pandas as pd
 
-from data.market import fetch_asset_data, fetch_crack_spreads
+from data.market import fetch_asset_data
 from data.store import (
     fetch_and_store_market_history,
     fetch_and_store_tanker_history,
@@ -22,11 +22,6 @@ from data.store import (
 @st.cache_data(ttl=300, show_spinner=False)
 def get_asset_data(timeframe: str = "60d") -> pd.DataFrame:
     return fetch_asset_data(timeframe)
-
-
-@st.cache_data(ttl=300, show_spinner=False)
-def get_crack_spreads(timeframe: str = "60d") -> pd.DataFrame:
-    return fetch_crack_spreads(timeframe)
 
 
 # ── Local long-term history (parquet-backed, incremental refresh) ────────────
