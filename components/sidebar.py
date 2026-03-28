@@ -27,6 +27,7 @@ def render_sidebar() -> dict:
 
         eia_key = os.environ.get("EIA_API_KEY", "")
         fred_key = os.environ.get("FRED_API_KEY", "")
+        firms_key = os.environ.get("FIRMS_MAP_KEY", "")
 
         if not eia_key:
             eia_key = st.text_input(
@@ -48,6 +49,16 @@ def render_sidebar() -> dict:
         else:
             st.success("FRED key loaded from environment", icon="✅")
 
+        if not firms_key:
+            firms_key = st.text_input(
+                "NASA FIRMS Key",
+                type="password",
+                placeholder="Get free key at firms.modaps.eosdis.nasa.gov",
+                help="Required for refinery fire monitoring",
+            )
+        else:
+            st.success("FIRMS key loaded from environment", icon="✅")
+
         st.markdown("---")
 
         # ── Refresh ──────────────────────────────────────────────────────
@@ -58,13 +69,14 @@ def render_sidebar() -> dict:
         st.markdown("""
         <div style="text-align: center; padding: 12px 0 0 0; font-size: 10px;
                     color: #555; font-family: 'Courier New';">
-            WAR DASHBOARD v1.0<br>
-            Data: Yahoo Finance · EIA · FRED
+            WAR DASHBOARD v2.0<br>
+            Data: Yahoo Finance · EIA · FRED · NASA FIRMS · OpenSky
         </div>
         """, unsafe_allow_html=True)
 
     return {
         "eia_key": eia_key,
         "fred_key": fred_key,
+        "firms_key": firms_key,
         "refresh": refresh,
     }

@@ -23,9 +23,17 @@ HISTORY_TICKERS = {
     "spx":      "^GSPC",
     "gold":     "GC=F",
     "us10y":    "^TNX",
-    "sblk":     "SBLK",
     "ho":       "HO=F",
     "rb":       "RB=F",
+}
+
+# Crude tanker equities for wet freight index
+TANKER_TICKERS = {
+    "fro":  "FRO",
+    "stng": "STNG",
+    "dht":  "DHT",
+    "insw": "INSW",
+    "tnk":  "TNK",
 }
 
 # Start dates — go as far back as each ticker allows
@@ -117,6 +125,82 @@ def fetch_and_store_market_history(force: bool = False) -> dict[str, pd.DataFram
             results[name] = existing if not existing.empty else pd.DataFrame()
 
     return results
+
+
+def fetch_and_store_tanker_history(force: bool = False) -> dict[str, pd.DataFrame]:
+    """Fetch full history for tanker equities (wet freight proxy)."""
+    _ensure_dir()
+    results = {}
+    today_str = datetime.now().strftime("%Y-%m-%d")
+
+    for name, ticker in TANKER_TICKERS.items():
+        path = _parquet_path(name)
+
+        if not force and not _is_stale(path):
+            existing = _read_parquet_safe(path)
+            if not existing.empty:
+                results[name] = existing
+                continue
+
+        existing = _read_parquet_safe(path)
+
+        if existing.empty:
+            start = HISTORY_START
+        else:
+            last_date = existing.index.max()
+            start = (last_date - timedelta(days=3)).strftime("%Y-%m-%d")
+
+        try:
+            new_df = yf.download(
+                ticker, start=start, end=today_str,
+                auto_adjust=True, progress=False, threads=False,
+            )
+            if new_df.empty:
+                results[name] = existing if not existing.empty else pd.DataFrame()
+                continue
+
+            if isinstance(new_df.columns, pd.MultiIndex):
+                new_df.columns = new_df.columns.get_level_values(0)
+            new_df.index.name = "Date"
+
+            if not existing.empty:
+                combined = pd.concat([existing, new_df])
+                combined = combined[~combined.index.duplicated(keep="last")]
+                combined = combined.sort_index()
+            else:
+                combined = new_df
+
+            combined.to_parquet(path)
+            results[name] = combined
+        except Exception:
+            results[name] = existing if not existing.empty else pd.DataFrame()
+
+    return results
+
+
+def build_tanker_index(tanker_data: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    """Build equal-weight normalised tanker equity index from stored data.
+
+    Each component is normalised to 100 at its first available date, then
+    averaged across names.  The result column is ``Tanker Freight``.
+    """
+    closes = {}
+    for name, df in tanker_data.items():
+        if df is None or df.empty:
+            continue
+        s = df["Close"] if "Close" in df.columns else df.iloc[:, 0]
+        s = s.dropna()
+        if len(s) > 1:
+            closes[name] = s
+
+    if not closes:
+        return pd.DataFrame()
+
+    combined = pd.DataFrame(closes)
+    # Normalise each to 100 at its own first valid observation
+    normed = combined / combined.bfill().iloc[0] * 100
+    idx = normed.mean(axis=1).rename("Tanker Freight")
+    return pd.DataFrame({"Tanker Freight": idx}).dropna()
 
 
 def load_market_history() -> dict[str, pd.DataFrame]:
@@ -211,6 +295,39 @@ def load_fred_history(api_key: str = "") -> pd.DataFrame:
     if api_key:
         return fetch_and_store_fred_history(api_key)
     return pd.DataFrame()
+
+
+# ── NASA FIRMS fire data ─────────────────────────────────────────────────────
+def fetch_and_store_firms(firms_key: str, force: bool = False) -> pd.DataFrame:
+    """Fetch NASA FIRMS fire detections and append to the local parquet store."""
+    _ensure_dir()
+    path = _parquet_path("firms_fires")
+
+    existing = _read_parquet_safe(path) if not force else pd.DataFrame()
+
+    from data.firms import fetch_firms_fires, aggregate_daily_counts
+    raw = fetch_firms_fires(firms_key, days=5)
+    new = aggregate_daily_counts(raw)
+
+    if new.empty:
+        return existing if not existing.empty else pd.DataFrame()
+
+    if not existing.empty:
+        combined = pd.concat([existing, new])
+        combined = combined[~combined.index.duplicated(keep="last")]
+        combined = combined.sort_index()
+    else:
+        combined = new
+
+    combined.to_parquet(path)
+    return combined
+
+
+# ── OpenSky flight data ──────────────────────────────────────────────────────
+def fetch_and_store_flights(force: bool = False) -> pd.DataFrame:
+    """Snapshot global airborne aircraft count and append to parquet."""
+    from data.opensky import update_flight_history
+    return update_flight_history()
 
 
 # ── Crack spread full history ────────────────────────────────────────────────

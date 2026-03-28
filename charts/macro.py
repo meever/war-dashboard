@@ -13,7 +13,7 @@ SIGNAL_GUIDE = {
     "yc": "⚠ Below 0 = inverted → recession signal. Above 0 = normal.",
     "indpro": "▲ Rising = expansion. ▼ Falling = contraction / recession risk.",
     "tcu": "▲ Above 80% = strong. ▼ Below 75% = weak demand / recession risk.",
-    "bdi": "▲ Rising = global trade growing. ▼ Sharp drop = demand destruction.",
+    "tanker": "▲ Rising = crude shipping demand up. ▼ Sharp drop = demand destruction.",
 }
 
 
@@ -112,13 +112,13 @@ def make_industrial_chart(df: pd.DataFrame) -> go.Figure:
 
 
 def make_bdi_chart(df: pd.DataFrame) -> go.Figure:
-    """Dry Bulk Shipping chart (SBLK ETF as freight proxy)."""
-    col = "Dry Bulk Shipping"
+    """Tanker Freight Index chart (wet freight proxy)."""
+    col = "Tanker Freight"
     fig = go.Figure()
 
     if col not in df.columns or df[col].dropna().empty:
-        fig.update_layout(**_base_layout("DRY BULK SHIPPING (SBLK)"))
-        fig.add_annotation(text="No shipping data available",
+        fig.update_layout(**_base_layout("TANKER FREIGHT INDEX"))
+        fig.add_annotation(text="No tanker freight data available",
                            xref="paper", yref="paper", x=0.5, y=0.5,
                            showarrow=False, font=dict(size=16, color=WAR_COLORS["red"]))
         return fig
@@ -127,21 +127,21 @@ def make_bdi_chart(df: pd.DataFrame) -> go.Figure:
 
     fig.add_trace(go.Scatter(
         x=series.index, y=series.values,
-        mode="lines", name="SBLK",
+        mode="lines", name="Tanker Index",
         line=dict(color=WAR_COLORS["green"], width=2),
         fill="tozeroy",
         fillcolor="rgba(0, 255, 65, 0.05)",
-        hovertemplate="%{y:,.0f}<extra></extra>",
+        hovertemplate="%{y:,.1f}<extra></extra>",
     ))
 
-    layout = _base_layout("DRY BULK SHIPPING — SBLK (Freight Proxy)")
+    layout = _base_layout("TANKER FREIGHT INDEX (Wet Freight Proxy)")
     layout["height"] = 380
     layout["legend"] = dict(
         bgcolor="rgba(0,0,0,0)", font=dict(size=9),
         orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
     )
     fig.update_layout(**layout)
-    _add_direction_note(fig, SIGNAL_GUIDE["bdi"])
+    _add_direction_note(fig, SIGNAL_GUIDE["tanker"])
     return fig
 
 
@@ -152,7 +152,7 @@ def make_macro_grid(fred_df: pd.DataFrame, asset_df: pd.DataFrame) -> go.Figure:
     titles = [
         "Yield Curve (10Y-2Y)",
         "Industrial Production",
-        "Dry Bulk Shipping (SBLK)",
+        "Tanker Freight Index",
         "Capacity Utilization (%)",
     ]
     fig = make_subplots(rows=2, cols=2, subplot_titles=titles, vertical_spacing=0.16, horizontal_spacing=0.08)
@@ -170,10 +170,10 @@ def make_macro_grid(fred_df: pd.DataFrame, asset_df: pd.DataFrame) -> go.Figure:
         fig.add_trace(go.Scatter(x=s.index, y=s.values, mode="lines", name="INDPRO",
                                  line=dict(color=WAR_COLORS["green"], width=2), showlegend=False), row=1, col=2)
 
-    # BDI
-    if not asset_df.empty and "Dry Bulk Shipping" in asset_df.columns:
-        s = asset_df["Dry Bulk Shipping"].dropna()
-        fig.add_trace(go.Scatter(x=s.index, y=s.values, mode="lines", name="SBLK",
+    # Tanker freight
+    if not asset_df.empty and "Tanker Freight" in asset_df.columns:
+        s = asset_df["Tanker Freight"].dropna()
+        fig.add_trace(go.Scatter(x=s.index, y=s.values, mode="lines", name="Tanker",
                                  line=dict(color=WAR_COLORS["amber"], width=2), showlegend=False), row=2, col=1)
 
     # Capacity utilization

@@ -17,7 +17,15 @@ ASSET_TICKERS = {
     "S&P 500": "^GSPC",
     "Gold": "GC=F",
     "US 10Y Yield": "^TNX",
-    "Dry Bulk Shipping": "SBLK",  # proxy for Baltic Dry — ^BDI delisted
+}
+
+# Crude tanker equities — equal-weight index proxies wet freight / BDTI
+TANKER_TICKERS = {
+    "FRO": "FRO",    # Frontline (VLCCs)
+    "STNG": "STNG",  # Scorpio Tankers (product/crude)
+    "DHT": "DHT",    # DHT Holdings (VLCCs)
+    "INSW": "INSW",  # International Seaways (crude)
+    "TNK": "TNK",    # Teekay Tankers (crude/product)
 }
 
 CRACK_TICKERS = {
@@ -33,7 +41,6 @@ _LABEL_TO_STORE_KEY = {
     "S&P 500": "spx",
     "Gold": "gold",
     "US 10Y Yield": "us10y",
-    "Dry Bulk Shipping": "sblk",
 }
 
 _CRACK_TO_STORE_KEY = {

@@ -131,13 +131,13 @@ def _check_yield_curve(fred_df: pd.DataFrame) -> tuple[bool, str, str]:
     return is_danger, f"{current:.2f}%", detail
 
 
-def _check_bdi(asset_df: pd.DataFrame) -> tuple[bool, str, str]:
-    """RED if Dry Bulk Shipping (SBLK) declined >15% over trailing 30 days."""
-    col = "Dry Bulk Shipping"
-    if asset_df.empty or col not in asset_df.columns:
-        return False, "N/A", "No BDI data"
+def _check_tanker(tanker_df: pd.DataFrame) -> tuple[bool, str, str]:
+    """RED if Tanker Freight index declined >15% over trailing 30 days."""
+    col = "Tanker Freight"
+    if tanker_df.empty or col not in tanker_df.columns:
+        return False, "N/A", "No tanker data"
 
-    series = asset_df[col].dropna()
+    series = tanker_df[col].dropna()
     if len(series) < 2:
         return False, "N/A", "Insufficient data"
 
@@ -145,12 +145,12 @@ def _check_bdi(asset_df: pd.DataFrame) -> tuple[bool, str, str]:
     baseline = series.iloc[-30] if len(series) >= 30 else series.iloc[0]
 
     if baseline == 0:
-        return False, f"${current:,.0f}", "—"
+        return False, f"{current:,.1f}", "—"
 
     pct_change = (current - baseline) / abs(baseline) * 100
     is_danger = pct_change < -15
     detail = f"30d: {pct_change:+.1f}%"
-    return is_danger, f"${current:,.0f}", detail
+    return is_danger, f"{current:,.1f}", detail
 
 
 def render_status_bar(
@@ -158,7 +158,7 @@ def render_status_bar(
     crack_df: pd.DataFrame,
     inv_df: pd.DataFrame,
     fred_df: pd.DataFrame,
-    asset_df: pd.DataFrame,
+    tanker_df: pd.DataFrame,
     asset_labels: dict,
 ):
     """Render a single compact row of 8 cards: 4 price + 4 signal."""
@@ -182,13 +182,13 @@ def render_status_bar(
     crack_d, crack_v, crack_det = _check_crack_spread(crack_df)
     inv_d, inv_v, inv_det = _check_inventories(inv_df)
     yc_d, yc_v, yc_det = _check_yield_curve(fred_df)
-    bdi_d, bdi_v, bdi_det = _check_bdi(asset_df)
+    tanker_d, tanker_v, tanker_det = _check_tanker(tanker_df)
 
     signal_cards = [
         _signal_card_html("Crack", crack_v, crack_d, crack_det),
         _signal_card_html("Inventory", inv_v, inv_d, inv_det),
         _signal_card_html("Yield Crv", yc_v, yc_d, yc_det),
-        _signal_card_html("Shipping", bdi_v, bdi_d, bdi_det),
+        _signal_card_html("Tanker", tanker_v, tanker_d, tanker_det),
     ]
 
     all_cards = price_cards + signal_cards

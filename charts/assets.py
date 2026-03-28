@@ -27,7 +27,6 @@ ASSET_COLORS = {
     "S&P 500": WAR_COLORS["green"],
     "Gold": WAR_COLORS["gold"],
     "US 10Y Yield": WAR_COLORS["cyan"],
-    "Dry Bulk Shipping": WAR_COLORS["white"],
 }
 
 # ── US recession periods (NBER) ─────────────────────────────────────────────
